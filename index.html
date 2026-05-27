@@ -55,9 +55,9 @@
   .new-col-btn { font-size: 13px; padding: 6px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--text); color: white; cursor: pointer; white-space: nowrap; }
   .new-col-btn:hover { opacity: 0.85; }
 
-  /* ── Board – auto height columns ── */
-  .board { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
-  .col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; width: calc(50% - 7px); min-width: 280px; flex-shrink: 0; transition: box-shadow 0.15s, opacity 0.15s; }
+  /* ── Board – masonry layout ── */
+  .board { columns: 2; column-gap: 14px; }
+  .col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; break-inside: avoid; margin-bottom: 14px; transition: box-shadow 0.15s, opacity 0.15s; }
   .col.dragging { opacity: 0.35; }
   .col.drag-over { box-shadow: 0 0 0 2px #378ADD; }
 
