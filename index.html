@@ -163,7 +163,21 @@
   .ai-fab:hover { transform: scale(1.08); }
   .ai-fab.hidden { display: none; }
 
-  /* ── Tab color modal ── */
+  /* ── Auto-Backup Modal ── */
+  .backup-modal { display:none; position:fixed; inset:0; z-index:700; align-items:center; justify-content:center; background:rgba(0,0,0,0.2); }
+  .backup-modal.open { display:flex; }
+  .backup-box { background:var(--surface); border-radius:var(--radius); padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.15); min-width:340px; max-width:480px; display:flex; flex-direction:column; gap:12px; }
+  .backup-box h4 { font-size:15px; font-weight:600; }
+  .backup-box p { font-size:13px; color:var(--text-muted); }
+  .backup-list { display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; }
+  .backup-item { display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--bg); border-radius:var(--radius-sm); font-size:13px; }
+  .backup-item-time { color:var(--text-muted); }
+  .backup-item-btn { font-size:12px; padding:3px 10px; border:1px solid var(--border-strong); border-radius:var(--radius-sm); background:transparent; cursor:pointer; color:var(--text); }
+  .backup-item-btn:hover { background:#E6F1FB; border-color:#378ADD; color:#378ADD; }
+  .backup-modal-close { font-size:13px; padding:6px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; cursor:pointer; color:var(--text-muted); align-self:flex-end; }
+  .backup-modal-close:hover { background:var(--bg); }
+  .auto-backup-hint { font-size:11px; color:var(--text-faint); text-align:center; margin-top:4px; }
+  #auto-backup-status { font-size:11px; color:var(--text-faint); white-space:nowrap; }
   .tab-color-modal { display:none; position:fixed; inset:0; z-index:700; align-items:center; justify-content:center; background:rgba(0,0,0,0.2); }
   .tab-color-modal.open { display:flex; }
   .tab-color-box { background:var(--surface); border-radius:var(--radius); padding:20px; box-shadow:0 8px 32px rgba(0,0,0,0.15); display:flex; flex-direction:column; gap:14px; min-width:200px; }
@@ -183,6 +197,10 @@
     <div class="pill">Erledigt: <strong id="done-count">0</strong></div>
     <div class="pill">Offen: <strong id="open-count">0</strong></div>
     <button class="topbar-btn log-btn" id="log-toggle-btn"><i class="ti ti-history"></i> Aktivitätslog</button>
+    <button class="topbar-btn" id="export-btn" title="Daten exportieren"><i class="ti ti-download"></i> Backup</button>
+    <button class="topbar-btn" id="import-btn" title="Daten importieren"><i class="ti ti-upload"></i> Wiederherstellen</button>
+    <input type="file" id="import-file" accept=".json" style="display:none" />
+    <button class="topbar-btn" id="auto-backup-restore-btn" title="Auto-Backup wiederherstellen"><i class="ti ti-history"></i> Auto-Backup</button>
     <button class="topbar-btn" id="reset-btn">↺ Zurücksetzen</button>
     <span id="server-status" style="font-size:12px; white-space:nowrap;">○ Prüfe…</span>
   </div>
@@ -190,6 +208,17 @@
 
 <!-- Tabs -->
 <div class="tabs-bar" id="tabs-bar"></div>
+
+<!-- Auto-Backup Modal -->
+<div class="backup-modal" id="backup-modal">
+  <div class="backup-box">
+    <h4>🕐 Auto-Backup wiederherstellen</h4>
+    <p>Die letzten automatischen Backups (alle 10 Minuten, lokal gespeichert):</p>
+    <div class="backup-list" id="backup-list"></div>
+    <div class="auto-backup-hint">⚠️ Alle aktuellen Daten werden beim Wiederherstellen überschrieben.</div>
+    <button class="backup-modal-close" id="backup-modal-close">Schließen</button>
+  </div>
+</div>
 
 <!-- Log panel -->
 <div class="log-overlay" id="log-overlay"></div>
@@ -839,12 +868,129 @@ async function sendAiMessage(){
   document.getElementById('ai-send').disabled=false;document.getElementById('ai-input').focus();
 }
 
+document.getElementById('auto-backup-restore-btn').addEventListener('click', () => {
+  let backups = [];
+  try { backups = JSON.parse(localStorage.getItem(AUTO_BACKUP_KEY)) || []; } catch(e) {}
+  const list = document.getElementById('backup-list');
+  if (backups.length === 0) {
+    list.innerHTML = '<div style="font-size:13px;color:var(--text-faint);padding:10px 0;">Noch keine Auto-Backups vorhanden.<br>Das erste wird in 10 Minuten erstellt.</div>';
+  } else {
+    list.innerHTML = backups.map((b, i) => `
+      <div class="backup-item">
+        <span class="backup-item-time">📅 ${b.time}</span>
+        <button class="backup-item-btn" data-idx="${i}">Wiederherstellen</button>
+      </div>
+    `).join('');
+    list.querySelectorAll('.backup-item-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const backup = backups[parseInt(btn.dataset.idx)];
+        if (!backup) return;
+        if (!confirm(`Backup vom ${backup.time} wiederherstellen?\n\nAlle aktuellen Daten werden überschrieben!`)) return;
+        applyData(backup.data);
+        saveData(); renderTabs(); render(); renderStats();
+        document.getElementById('backup-modal').classList.remove('open');
+        alert('✅ Auto-Backup erfolgreich wiederhergestellt!');
+      });
+    });
+  }
+  document.getElementById('backup-modal').classList.add('open');
+});
+
+document.getElementById('backup-modal-close').addEventListener('click', () => {
+  document.getElementById('backup-modal').classList.remove('open');
+});
+document.getElementById('backup-modal').addEventListener('click', e => {
+  if (e.target === document.getElementById('backup-modal')) document.getElementById('backup-modal').classList.remove('open');
+});
+
+// ── Auto-Backup ───────────────────────────────────────────────────────────
+const AUTO_BACKUP_INTERVAL = 10 * 60 * 1000; // 10 Minuten
+const AUTO_BACKUP_KEY = 'todo_auto_backups';
+const MAX_AUTO_BACKUPS = 6; // letzte 6 Backups behalten (= 1 Stunde)
+
+function saveAutoBackup() {
+  try {
+    const data = getSaveData();
+    const now = new Date();
+    const stamp = now.toISOString().slice(0,16).replace('T',' ');
+    let backups = [];
+    try { backups = JSON.parse(localStorage.getItem(AUTO_BACKUP_KEY)) || []; } catch(e) {}
+    backups.unshift({time: stamp, data});
+    if (backups.length > MAX_AUTO_BACKUPS) backups = backups.slice(0, MAX_AUTO_BACKUPS);
+    localStorage.setItem(AUTO_BACKUP_KEY, JSON.stringify(backups));
+    console.log(`Auto-Backup gespeichert: ${stamp}`);
+    updateAutoBackupStatus();
+  } catch(e) { console.warn('Auto-Backup fehlgeschlagen:', e); }
+}
+
+function updateAutoBackupStatus() {
+  const el = document.getElementById('auto-backup-status');
+  if (!el) return;
+  try {
+    const backups = JSON.parse(localStorage.getItem(AUTO_BACKUP_KEY)) || [];
+    if (backups.length > 0) {
+      el.textContent = `Letztes Auto-Backup: ${backups[0].time}`;
+    }
+  } catch(e) {}
+}
+
+// Auto-Backup alle 10 Minuten
+setInterval(saveAutoBackup, AUTO_BACKUP_INTERVAL);
+
+// ── Backup Export ─────────────────────────────────────────────────────────
+document.getElementById('export-btn').addEventListener('click', () => {
+  const data = getSaveData();
+  const now = new Date();
+  const stamp = now.toISOString().slice(0,10) + '_' + now.toTimeString().slice(0,5).replace(':','-');
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `todos_backup_${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// ── Backup Import ─────────────────────────────────────────────────────────
+document.getElementById('import-btn').addEventListener('click', () => {
+  document.getElementById('import-file').click();
+});
+
+document.getElementById('import-file').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+      if (!data.lists || !Array.isArray(data.lists)) {
+        alert('Ungültige Backup-Datei.');
+        return;
+      }
+      if (!confirm(`Backup vom ${file.name} wiederherstellen?\n\nAlle aktuellen Daten werden überschrieben!`)) return;
+      applyData(data);
+      saveData();
+      renderTabs();
+      render();
+      renderStats();
+      alert('✅ Backup erfolgreich wiederhergestellt!');
+    } catch(err) {
+      alert('Fehler beim Lesen der Datei: ' + err.message);
+    }
+    e.target.value = '';
+  };
+  reader.readAsText(file);
+});
+
 // ── Init ──────────────────────────────────────────────────────────────────
 (async()=>{
   await loadData();
   renderColorPicker();
   renderTabs();
   render();
+  // Erstes Auto-Backup sofort beim Start
+  setTimeout(saveAutoBackup, 5000);
+  updateAutoBackupStatus();
 })();
 </script>
 </body>
