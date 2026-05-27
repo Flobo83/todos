@@ -96,8 +96,10 @@
   .delete-item-btn { background: none; border: none; cursor: pointer; color: var(--text-faint); font-size: 14px; padding: 1px 3px; border-radius: 4px; flex-shrink: 0; margin-top: 1px; }
   .delete-item-btn:hover { color: var(--red); background: #FCEBEB; }
   .todo-item.task-dragging { opacity: 0.35; }
-  .task-drop-indicator { height: 3px; background: #378ADD; border-radius: 2px; margin: 2px 0; display: none; }
-  .task-drop-indicator.active { display: block; }
+  .todo-item.drag-above { border-top: 2px solid #378ADD; }
+  .todo-item.drag-below { border-bottom: 2px solid #378ADD !important; }
+  .col.task-drag-empty-over { box-shadow: 0 0 0 2px #378ADD; }
+  .task-drop-indicator { display: none; }
 
   .delete-done-bar { margin-top: 10px; display: flex; justify-content: flex-end; }
   .delete-done-btn { font-size: 12px; padding: 4px 10px; border: 1px solid #E24B4A44; border-radius: var(--radius-sm); background: transparent; color: var(--red); cursor: pointer; display: flex; align-items: center; gap: 5px; }
@@ -732,31 +734,97 @@ function render() {
   function updateTaskScroll(y){stopTaskScroll();const ZONE=100,SPEED=12;if(y<ZONE)taskScrollInterval=setInterval(()=>window.scrollBy(0,-SPEED),16);else if(y>window.innerHeight-ZONE)taskScrollInterval=setInterval(()=>window.scrollBy(0,SPEED),16);}
 
   board.querySelectorAll('[data-action="dragtask"]').forEach(handle=>{
-    handle.addEventListener('dragstart',e=>{taskDragSrcCol=handle.dataset.col;taskDragSrcId=handle.dataset.id;e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',taskDragSrcId);e.stopPropagation();setTimeout(()=>{const row=handle.closest('.todo-item');if(row)row.classList.add('task-dragging');},0);});
-    handle.addEventListener('dragend',()=>{board.querySelectorAll('.todo-item.task-dragging').forEach(r=>r.classList.remove('task-dragging'));board.querySelectorAll('.task-drop-indicator.active').forEach(i=>i.classList.remove('active'));stopTaskScroll();taskDragSrcCol=null;taskDragSrcId=null;});
+    handle.addEventListener('dragstart',e=>{
+      taskDragSrcCol=handle.dataset.col;taskDragSrcId=handle.dataset.id;
+      e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',taskDragSrcId);
+      e.stopPropagation();
+      setTimeout(()=>{const row=handle.closest('.todo-item');if(row)row.classList.add('task-dragging');},0);
+    });
+    handle.addEventListener('dragend',()=>{
+      board.querySelectorAll('.todo-item.task-dragging').forEach(r=>r.classList.remove('task-dragging'));
+      board.querySelectorAll('.todo-item.drag-above,.todo-item.drag-below').forEach(r=>{r.classList.remove('drag-above','drag-below');});
+      board.querySelectorAll('.col.task-drag-empty-over').forEach(c=>c.classList.remove('task-drag-empty-over'));
+      stopTaskScroll();taskDragSrcCol=null;taskDragSrcId=null;
+    });
   });
 
+  // Dragover on individual task rows
+  board.querySelectorAll('.todo-item').forEach(row=>{
+    if(row.querySelector('.checkbox.checked')) return; // skip done items
+    row.addEventListener('dragover',e=>{
+      if(!taskDragSrcId)return;
+      e.preventDefault();e.stopPropagation();
+      updateTaskScroll(e.clientY);
+      board.querySelectorAll('.todo-item.drag-above,.todo-item.drag-below').forEach(r=>{r.classList.remove('drag-above','drag-below');});
+      const rect=row.getBoundingClientRect();
+      const half=rect.top+rect.height/2;
+      if(e.clientY<half) row.classList.add('drag-above');
+      else row.classList.add('drag-below');
+    });
+    row.addEventListener('dragleave',e=>{
+      if(!e.relatedTarget||!row.contains(e.relatedTarget)){row.classList.remove('drag-above','drag-below');}
+    });
+    row.addEventListener('drop',e=>{
+      if(!taskDragSrcId)return;
+      e.preventDefault();e.stopPropagation();stopTaskScroll();
+      const above=row.classList.contains('drag-above');
+      row.classList.remove('drag-above','drag-below');
+      const toColId=row.dataset.col;
+      const targetId=row.dataset.itemId;
+      if(!toColId||!taskDragSrcCol||taskDragSrcId===targetId)return;
+      const s=state();
+      // Remove from source
+      const srcItems=s[taskDragSrcCol];
+      const srcIdx=srcItems.findIndex(i=>i.id===taskDragSrcId);
+      if(srcIdx===-1)return;
+      const[movedItem]=srcItems.splice(srcIdx,1);
+      // Insert into target
+      if(!s[toColId])s[toColId]=[];
+      const toOpen=s[toColId].filter(i=>!i.done);
+      const toDone=s[toColId].filter(i=>i.done);
+      const targetIdx=toOpen.findIndex(i=>i.id===targetId);
+      if(targetIdx===-1){
+        // target is a done item or not found – append to open
+        toOpen.push(movedItem);
+      } else {
+        toOpen.splice(above?targetIdx:targetIdx+1,0,movedItem);
+      }
+      s[toColId]=[...toOpen,...toDone];
+      if(toColId!==taskDragSrcCol)addLog('moved',movedItem.text,`${colTitle(taskDragSrcCol)} → ${colTitle(toColId)}`);
+      saveData();render();renderStats();
+    });
+  });
+
+  // Drop on empty column area (no tasks)
   board.querySelectorAll('.col').forEach(colEl=>{
     colEl.addEventListener('dragover',e=>{
       if(!taskDragSrcId)return;
-      e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='move';
+      // Only handle if not hovering a task row
+      if(e.target.closest('.todo-item'))return;
+      e.preventDefault();e.stopPropagation();
       updateTaskScroll(e.clientY);
-      const indicators=[...colEl.querySelectorAll('.task-drop-indicator')];
-      board.querySelectorAll('.task-drop-indicator.active').forEach(i=>i.classList.remove('active'));
-      let closest=null,closestDist=Infinity;
-      indicators.forEach(ind=>{const rect=ind.getBoundingClientRect();const dist=Math.abs(e.clientY-(rect.top+rect.height/2));if(dist<closestDist){closestDist=dist;closest=ind;}});
-      if(closest)closest.classList.add('active');
+      colEl.classList.add('task-drag-empty-over');
     });
-    colEl.addEventListener('dragleave',e=>{if(!taskDragSrcId)return;if(!colEl.contains(e.relatedTarget)){colEl.querySelectorAll('.task-drop-indicator.active').forEach(i=>i.classList.remove('active'));stopTaskScroll();}});
+    colEl.addEventListener('dragleave',e=>{
+      if(!e.relatedTarget||!colEl.contains(e.relatedTarget))colEl.classList.remove('task-drag-empty-over');
+    });
     colEl.addEventListener('drop',e=>{
-      if(!taskDragSrcId)return;e.preventDefault();e.stopPropagation();stopTaskScroll();
-      const toColId=colEl.dataset.colId;const activeInd=colEl.querySelector('.task-drop-indicator.active');const dropPos=activeInd?parseInt(activeInd.dataset.pos):null;
-      board.querySelectorAll('.task-drop-indicator.active').forEach(i=>i.classList.remove('active'));
+      if(!taskDragSrcId)return;
+      if(e.target.closest('.todo-item'))return; // handled by row
+      e.preventDefault();e.stopPropagation();stopTaskScroll();
+      colEl.classList.remove('task-drag-empty-over');
+      const toColId=colEl.dataset.colId;
       if(!toColId||!taskDragSrcCol)return;
-      const s=state();const srcItems=s[taskDragSrcCol];const realSrcIdx=srcItems.findIndex(i=>i.id===taskDragSrcId);if(realSrcIdx===-1)return;
-      const[movedItem]=srcItems.splice(realSrcIdx,1);
-      if(toColId===taskDragSrcCol){const open=srcItems.filter(i=>!i.done);const done=srcItems.filter(i=>i.done);const at=Math.min(dropPos??open.length,open.length);open.splice(at,0,movedItem);s[taskDragSrcCol]=[...open,...done];}
-      else{if(!s[toColId])s[toColId]=[];const toOpen=s[toColId].filter(i=>!i.done);const toDone=s[toColId].filter(i=>i.done);const at=Math.min(dropPos??toOpen.length,toOpen.length);toOpen.splice(at,0,movedItem);s[toColId]=[...toOpen,...toDone];addLog('moved',movedItem.text,`${colTitle(taskDragSrcCol)} → ${colTitle(toColId)}`);}
+      const s=state();
+      const srcIdx=s[taskDragSrcCol].findIndex(i=>i.id===taskDragSrcId);
+      if(srcIdx===-1)return;
+      const[movedItem]=s[taskDragSrcCol].splice(srcIdx,1);
+      if(!s[toColId])s[toColId]=[];
+      const toOpen=s[toColId].filter(i=>!i.done);
+      const toDone=s[toColId].filter(i=>i.done);
+      toOpen.push(movedItem);
+      s[toColId]=[...toOpen,...toDone];
+      if(toColId!==taskDragSrcCol)addLog('moved',movedItem.text,`${colTitle(taskDragSrcCol)} → ${colTitle(toColId)}`);
       saveData();render();renderStats();
     });
   });
